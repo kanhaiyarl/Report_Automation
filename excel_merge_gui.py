@@ -55,7 +55,7 @@ class ExcelMergeApp:
     def __init__(self, master):
         self.master = master
         master.title("Excel Sheet Merge Tool")
-        master.geometry("570x420")
+        master.geometry("570x600")
         master.configure(bg="#f4f6fb")
         master.resizable(False, False)
 
