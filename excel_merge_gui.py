@@ -44,13 +44,7 @@ class ToolTip(object):
             tw.destroy()
 
 class ExcelMergeApp:
-    def toggle_file2_state(self):
-        if self.append_replace_var.get():
-            self.file2_entry.config(state='normal')
-            self.file2_btn.config(state='normal')
-        else:
-            self.file2_entry.config(state='disabled')
-            self.file2_btn.config(state='disabled')
+
 
     def __init__(self, master):
         self.master = master
@@ -60,7 +54,6 @@ class ExcelMergeApp:
         master.resizable(False, False)
 
         self.file1_path = tk.StringVar()
-        self.file2_path = tk.StringVar()
         self.datetime_str = tk.StringVar()
 
         label_font = ("Segoe UI", 11)
@@ -99,13 +92,6 @@ class ExcelMergeApp:
         file1_btn.grid(row=1, column=1, sticky="w")
         ToolTip(file1_btn, "Select the Excel file you want to update.")
 
-        # File 2
-        tk.Label(file_frame, text="File 2 (to append/replace):", font=section_font, bg="#f4f6fb", anchor="w").grid(row=2, column=0, sticky="w", pady=(12,2))
-        self.file2_entry = tk.Entry(file_frame, textvariable=self.file2_path, width=36, font=entry_font, relief="groove", bd=2)
-        self.file2_entry.grid(row=3, column=0, padx=(0,8), sticky="w")
-        self.file2_btn = tk.Button(file_frame, text="Browse", command=self.browse_file2, font=button_font, bg="#5b9bd5", fg="white", activebackground="#3d6fa5", relief="flat", cursor="hand2")
-        self.file2_btn.grid(row=3, column=1, sticky="w")
-        ToolTip(self.file2_btn, "Select the Excel file to take new data from.")
 
         # Date-time input
         dt_frame = tk.Frame(master, bg="#f4f6fb")
@@ -115,29 +101,14 @@ class ExcelMergeApp:
         dt_entry.grid(row=0, column=1, padx=(12,0))
         ToolTip(dt_entry, "Type the date and time (e.g. 2025-07-18 10:15)")
 
-        # Operation checkboxes
-        option_frame = tk.Frame(master, bg="#f4f6fb")
-        option_frame.pack(pady=(10,0), fill=tk.X, padx=30)
-        self.remove_rows_var = tk.BooleanVar(value=True)
-        self.append_replace_var = tk.BooleanVar(value=True)
-        remove_cb = tk.Checkbutton(option_frame, text="Remove rows from File 1 before date-time", variable=self.remove_rows_var, bg="#f4f6fb", font=label_font, anchor="w")
-        append_cb = tk.Checkbutton(option_frame, text="Append/replace from File 2 on/after date-time", variable=self.append_replace_var, bg="#f4f6fb", font=label_font, anchor="w", command=self.toggle_file2_state)
-        remove_cb.grid(row=0, column=0, sticky="w")
-        append_cb.grid(row=1, column=0, sticky="w")
-        ToolTip(remove_cb, "Remove rows in File 1 where 'datetime' is before the given date-time.")
-        ToolTip(append_cb, "Append or replace rows in File 1 with rows from File 2 on or after the date-time.")
-        self.toggle_file2_state()
+
 
         # Buttons frame
         btns_frame = tk.Frame(master, bg="#f4f6fb")
         btns_frame.pack(pady=25)
 
-        process_btn = tk.Button(btns_frame, text="Process", command=self.process_preview, font=button_font, bg="#4b7bec", fg="white", activebackground="#3867d6", relief="flat", cursor="hand2")
-        process_btn.grid(row=0, column=0, padx=10)
-        ToolTip(process_btn, "Preview what will happen (row counts, etc) without saving.")
-
         execute_btn = tk.Button(btns_frame, text="Execute", command=self.process_files, font=button_font, bg="#2b3a67", fg="white", activebackground="#1a2240", relief="flat", cursor="hand2")
-        execute_btn.grid(row=0, column=1, padx=10)
+        execute_btn.grid(row=0, column=0, padx=10)
         ToolTip(execute_btn, "Run the process and save the updated Excel file.")
 
         # Footer
@@ -149,67 +120,114 @@ class ExcelMergeApp:
         if path:
             self.file1_path.set(path)
 
-    def browse_file2(self):
-        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
-        if path:
-            self.file2_path.set(path)
+
 
     def get_processed_dataframe(self):
         file1 = self.file1_path.get()
-        file2 = self.file2_path.get()
         dt_str = self.datetime_str.get()
-        do_remove = self.remove_rows_var.get()
-        do_append = self.append_replace_var.get()
 
-        if not file1 or not file2 or not dt_str:
-            return None, "Please select both files and enter a date-time."
-        if not (do_remove or do_append):
-            return None, "Please select at least one operation to perform."
+        if not file1 or not dt_str:
+            return None, "Please select the file and enter a date-time."
         try:
             dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
         except ValueError:
             return None, "Invalid date-time format. Use YYYY-MM-DD HH:MM"
+        # --- New logic to preserve Excel formatting using openpyxl ---
+        import openpyxl
+        from openpyxl.utils import get_column_letter
+        from openpyxl.worksheet.table import Table
+        import tempfile
+
         try:
-            df1 = pd.read_excel(file1)
-            df2 = pd.read_excel(file2)
+            wb = openpyxl.load_workbook(file1)
+            ws = wb.active
         except Exception as e:
-            return None, f"Failed to read Excel files: {e}"
+            return None, f"Failed to read Excel file: {e}"
 
-        # Handle datetime columns with various possible names
-        dt_col1 = None
-        dt_col2 = None
-        for col in df1.columns:
-            if col.strip().lower() in ['datetime', 'end date', 'enddate']:
-                dt_col1 = col
+        # Find the header row and the 'End Time' column index
+        header_row = None
+        end_time_col_idx = None
+        for i, row in enumerate(ws.iter_rows(min_row=1, max_row=5), 1):
+            for cell in row:
+                if cell.value and str(cell.value).strip().lower() == 'end time':
+                    header_row = i
+                    end_time_col_idx = cell.col_idx
+                    break
+            if header_row:
                 break
-        for col in df2.columns:
-            if col.strip().lower() in ['datetime', 'endezeit', 'end date', 'enddate']:
-                dt_col2 = col
-                break
-        if not dt_col1 or not dt_col2:
-            return None, "File 1 must have a 'End date' column and File 2 must have an 'Endezeit' column (or variants)."
-        df1 = df1.rename(columns={dt_col1: 'datetime'})
-        df2 = df2.rename(columns={dt_col2: 'datetime'})
-        df1['datetime'] = pd.to_datetime(df1['datetime'], errors='coerce')
-        df2['datetime'] = pd.to_datetime(df2['datetime'], errors='coerce')
-        if df1['datetime'].isnull().all() or df2['datetime'].isnull().all():
-            return None, "Failed to parse date-times in one or both files. Please check the date columns."
+        if not header_row or not end_time_col_idx:
+            return None, "File 1 must have an 'End Time' column."
 
-        # Assume there is a unique key column to identify duplicates, e.g., 'id'.
-        if 'id' not in df1.columns or 'id' not in df2.columns:
-            return None, "Both files must have an 'id' column (unique row identifier)."
+        # Parse the filter datetime
+        import datetime as dtmod
+        try:
+            filter_dt = dtmod.datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+        except Exception:
+            return None, "Invalid date-time format. Use YYYY-MM-DD HH:MM"
 
-        result_df = df1.copy()
-        if do_remove:
-            result_df = result_df[result_df['datetime'] >= dt].copy()
-        if do_append:
-            df2_filtered = df2[df2['datetime'] >= dt].copy()
-            # Remove rows from result_df that have the same 'id' as in df2_filtered
-            result_df = result_df[~result_df['id'].isin(df2_filtered['id'])]
-            # Append df2_filtered rows
-            result_df = pd.concat([result_df, df2_filtered], ignore_index=True)
-        result_df = result_df.sort_values(by='datetime')
-        return result_df, None
+        # Collect rows to keep (header + rows with End Time > filter_dt)
+        rows_to_keep = []
+        for idx, row in enumerate(ws.iter_rows(min_row=1, max_row=ws.max_row), 1):
+            if idx <= header_row:
+                rows_to_keep.append([cell for cell in row])
+            else:
+                cell = row[end_time_col_idx-1]
+                try:
+                    cell_dt = pd.to_datetime(cell.value, errors='coerce')
+                except Exception:
+                    cell_dt = None
+                if cell_dt is not pd.NaT and pd.notnull(cell_dt) and cell_dt > filter_dt:
+                    rows_to_keep.append([cell for cell in row])
+
+        # Create a new workbook and copy rows with formatting
+        new_wb = openpyxl.Workbook()
+        new_ws = new_wb.active
+        import copy
+        for r_idx, row in enumerate(rows_to_keep, 1):
+            for c_idx, cell in enumerate(row, 1):
+                new_cell = new_ws.cell(row=r_idx, column=c_idx, value=cell.value)
+                # Copy only public style attributes with copy.copy() and error handling
+                if cell.has_style:
+                    try:
+                        if cell.font: new_cell.font = copy.copy(cell.font)
+                    except Exception: pass
+                    try:
+                        if cell.fill: new_cell.fill = copy.copy(cell.fill)
+                    except Exception: pass
+                    try:
+                        if cell.border: new_cell.border = copy.copy(cell.border)
+                    except Exception: pass
+                    try:
+                        if cell.alignment: new_cell.alignment = copy.copy(cell.alignment)
+                    except Exception: pass
+                    try:
+                        if cell.number_format: new_cell.number_format = cell.number_format
+                    except Exception: pass
+                    try:
+                        if cell.protection: new_cell.protection = copy.copy(cell.protection)
+                    except Exception: pass
+                if cell.hyperlink:
+                    new_cell.hyperlink = cell.hyperlink
+                if cell.comment:
+                    new_cell.comment = cell.comment
+        # Copy column widths
+        for col in ws.column_dimensions:
+            new_ws.column_dimensions[col].width = ws.column_dimensions[col].width
+        # Copy merged cells
+        for merged_range in ws.merged_cells.ranges:
+            new_ws.merge_cells(str(merged_range))
+        # Copy tables if present
+        if hasattr(ws, 'tables'):
+            for tname, table in ws.tables.items():
+                new_ws.add_table(Table(displayName=table.displayName, ref=table.ref))
+
+        # Save to a temporary file and reload as DataFrame for preview
+        tmpfile = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+        new_wb.save(tmpfile.name)
+        tmpfile.close()
+        # For preview, load as DataFrame
+        result_df = pd.read_excel(tmpfile.name, header=header_row-1)
+        return result_df, None, tmpfile.name
 
     def process_preview(self):
         result_df, err = self.get_processed_dataframe()
@@ -220,15 +238,24 @@ class ExcelMergeApp:
         messagebox.showinfo("Process Preview", msg)
 
     def process_files(self):
-        result_df, err = self.get_processed_dataframe()
+        result = self.get_processed_dataframe()
+        # Now get_processed_dataframe returns (result_df, err, temp_file_path)
+        if len(result) == 2:
+            result_df, err = result
+            temp_file_path = None
+        else:
+            result_df, err, temp_file_path = result
         if err:
             messagebox.showerror("Error", err)
             return
-        # Save the result
         save_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")], title="Save updated File 1 as...")
         if save_path:
             try:
-                result_df.to_excel(save_path, index=False)
+                if temp_file_path:
+                    import shutil
+                    shutil.copy(temp_file_path, save_path)
+                else:
+                    result_df.to_excel(save_path, index=False)
                 messagebox.showinfo("Success", f"File saved to {save_path}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save file: {e}")
